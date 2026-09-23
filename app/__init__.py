@@ -1,0 +1,2 @@
+"""Security monitoring application package."""
+

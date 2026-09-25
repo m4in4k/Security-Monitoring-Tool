@@ -1,6 +1,6 @@
 # Sekuro
 
-Sentinel Monitor is a web-based security and availability monitoring platform. It is a learning-focused full-stack portfolio project built with FastAPI and a modern React dashboard.
+Sekuro is a web-based security and availability monitoring platform. It is a learning-focused full-stack portfolio project built with FastAPI and a modern React dashboard.
 
 > Current stage: the dashboard foundation, FastAPI target API, PostgreSQL persistence, and manual HTTP security checks are implemented. Scheduled checks are the next milestone.
 

@@ -6,7 +6,7 @@ from os import getenv
 
 
 DEFAULT_DATABASE_URL = (
-    "postgresql+psycopg://sentinel:sentinel@localhost:5432/sentinel"
+    "postgresql+psycopg://sekuro:sekuro@localhost:5432/sekuro"
 )
 
 

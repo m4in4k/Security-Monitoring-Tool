@@ -24,7 +24,7 @@ class Base(DeclarativeBase):
 
 
 class Target(Base):
-    """An authorized web endpoint monitored by Sentinel."""
+    """An authorized web endpoint monitored by Sekuro."""
 
     __tablename__ = "targets"
     __table_args__ = (

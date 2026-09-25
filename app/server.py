@@ -14,7 +14,7 @@ def create_selector_loop() -> asyncio.AbstractEventLoop:
 
 def main() -> None:
     """Run the FastAPI application with development-friendly options."""
-    parser = argparse.ArgumentParser(description="Run the Sentinel Monitor API")
+    parser = argparse.ArgumentParser(description="Run the Sekuro API")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8000, type=int)
     parser.add_argument("--reload", action="store_true")

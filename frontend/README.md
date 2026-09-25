@@ -1,6 +1,6 @@
-# Sentinel Monitor dashboard
+# Sekuro dashboard
 
-This directory contains the React dashboard for Sentinel Monitor.
+This directory contains the React dashboard for Sekuro.
 
 ## Commands
 

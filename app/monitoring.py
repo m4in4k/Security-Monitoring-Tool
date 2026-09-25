@@ -323,7 +323,7 @@ async def monitor_url(
         async with aiohttp.ClientSession(
             connector=connector,
             timeout=timeout,
-            headers={"User-Agent": "SentinelMonitor/0.1"},
+            headers={"User-Agent": "SekuroMonitor/0.1"},
         ) as session:
             async with asyncio.timeout(timeout_seconds):
                 observation = await fetch_with_redirects(

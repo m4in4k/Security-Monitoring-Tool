@@ -18,8 +18,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Online Security Monitoring Tool",
-    description="Monitor the availability and basic security posture of authorized targets.",
+    title="Sekuro API",
+    description="Sekuro monitors the availability and basic security posture of authorized targets.",
     version="0.1.0",
     lifespan=lifespan,
 )

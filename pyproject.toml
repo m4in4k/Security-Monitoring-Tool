@@ -1,7 +1,7 @@
 [project]
-name = "security-monitoring-tool"
+name = "sekuro"
 version = "0.1.0"
-description = "A learning-focused online security monitoring API."
+description = "The API for the Sekuro availability and security monitoring platform."
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.12,<4.0",
@@ -23,7 +23,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
-sentinel-api = "app.server:main"
+sekuro-api = "app.server:main"
 
 [tool.setuptools.packages.find]
 include = ["app*"]

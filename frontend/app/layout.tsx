@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Sentinel Monitor | Security Monitoring Dashboard",
+  title: "Sekuro | Security Monitoring Dashboard",
   description:
     "Monitor website availability, TLS certificates, security headers, and alerts from one dashboard.",
   icons: {

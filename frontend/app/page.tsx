@@ -224,7 +224,7 @@ export default function Home() {
       context.registerTool({
         name: "add_monitored_target",
         title: "Add monitored target",
-        description: "Persist an authorized website through the Sentinel Monitor API.",
+        description: "Persist an authorized website through the Sekuro API.",
         inputSchema: {
           type: "object",
           properties: {
@@ -405,7 +405,7 @@ export default function Home() {
             </Button>
             <div>
               <h1 className="text-lg font-semibold tracking-tight text-white sm:text-xl">Security overview</h1>
-              <p className="hidden text-sm text-slate-500 sm:block">Live data from the Sentinel Monitor API</p>
+              <p className="hidden text-sm text-slate-500 sm:block">Live data from the Sekuro API</p>
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
@@ -587,7 +587,7 @@ export default function Home() {
 }
 
 function Brand() {
-  return <div className="flex h-20 items-center gap-3 border-b border-white/[0.07] px-6"><span className="relative flex size-9 items-center justify-center rounded-xl bg-blue-500 text-white shadow-[0_0_28px_rgba(59,130,246,0.24)]"><ShieldCheck className="size-5" /></span><span><span className="block text-sm font-semibold tracking-wide text-white">SENTINEL</span><span className="block text-[11px] font-medium uppercase tracking-[0.22em] text-blue-400">Monitor</span></span></div>;
+  return <div className="flex h-20 items-center gap-3 border-b border-white/[0.07] px-6"><span className="relative flex size-9 items-center justify-center rounded-xl bg-blue-500 text-white shadow-[0_0_28px_rgba(59,130,246,0.24)]"><ShieldCheck className="size-5" /></span><span><span className="block text-sm font-semibold tracking-wide text-white">SEKURO</span><span className="block text-[11px] font-medium uppercase tracking-[0.22em] text-blue-400">Monitor</span></span></div>;
 }
 
 function NavItem({ icon: Icon, label, active = false, count }: { icon: typeof Server; label: string; active?: boolean; count?: number }) {

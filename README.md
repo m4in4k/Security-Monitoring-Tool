@@ -1,4 +1,4 @@
-# Sentinel Monitor
+# Sekuro
 
 Sentinel Monitor is a web-based security and availability monitoring platform. It is a learning-focused full-stack portfolio project built with FastAPI and a modern React dashboard.
 

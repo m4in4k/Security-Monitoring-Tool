@@ -29,12 +29,13 @@ from sqlalchemy.pool import NullPool
 from app import targets as targets_module
 from app import auth as auth_module
 from app.auth import IdentityClaims, get_current_user
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.database import get_session
 from app.main import app
-from app.models import CheckResult, User
+from app.models import CheckResult, Target, User
 from app.monitoring import MonitorOutcome
 from app.retention import prune_expired_check_results
+from app.scheduler import claim_due_targets, run_scheduler_once
 
 
 pytestmark = pytest.mark.integration
@@ -262,7 +263,6 @@ def test_history_filters_paginates_calculates_uptime_and_enforces_ownership(
             "to": (base_time + timedelta(days=4)).isoformat(),
         },
     )
-
     assert response.status_code == 200
     body = response.json()
     assert body["total"] == 3
@@ -283,6 +283,161 @@ def test_history_filters_paginates_calculates_uptime_and_enforces_ownership(
 
     active_user["value"] = bob
     assert client.get(f"/targets/{target_id}/checks").status_code == 404
+
+
+def test_concurrent_scheduler_workers_claim_each_due_target_once(
+    postgres_api: tuple[
+        TestClient,
+        async_sessionmaker[AsyncSession],
+        dict[str, User],
+        tuple[User, User],
+    ],
+) -> None:
+    client, session_factory, _, _ = postgres_api
+    due = create_target(client, "Due", "https://due.example.com")
+    disabled = create_target(
+        client,
+        "Disabled",
+        "https://disabled.example.com",
+        enabled=False,
+    )
+    future = create_target(client, "Future", "https://future.example.com")
+    now = datetime(2026, 9, 27, 12, 0, tzinfo=UTC)
+
+    async def arrange_and_claim() -> tuple[list[UUID], datetime]:
+        target_ids = [
+            UUID(due["id"]),
+            UUID(disabled["id"]),
+            UUID(future["id"]),
+        ]
+        async with session_factory() as session:
+            targets = {
+                target.id: target
+                for target in await session.scalars(
+                    select(Target).where(Target.id.in_(target_ids))
+                )
+            }
+            targets[UUID(due["id"])].next_check_at = now - timedelta(seconds=1)
+            targets[UUID(disabled["id"])].next_check_at = now - timedelta(seconds=1)
+            targets[UUID(future["id"])].next_check_at = now + timedelta(hours=1)
+            await session.commit()
+
+        first, second = await asyncio.gather(
+            claim_due_targets(
+                session_factory,
+                now=now,
+                limit=10,
+                claim_ttl_seconds=300,
+            ),
+            claim_due_targets(
+                session_factory,
+                now=now,
+                limit=10,
+                claim_ttl_seconds=300,
+            ),
+        )
+        async with session_factory() as session:
+            next_check_at = await session.scalar(
+                select(Target.next_check_at).where(Target.id == UUID(due["id"]))
+            )
+        assert next_check_at is not None
+        return [claim.id for claim in [*first, *second]], next_check_at
+
+    claimed_ids, next_check_at = run_async(arrange_and_claim())
+
+    assert claimed_ids == [UUID(due["id"])]
+    assert next_check_at == now + timedelta(
+        seconds=due["check_interval_seconds"]
+    )
+
+
+def test_scheduler_cycle_persists_and_releases_claim_with_controlled_time(
+    postgres_api: tuple[
+        TestClient,
+        async_sessionmaker[AsyncSession],
+        dict[str, User],
+        tuple[User, User],
+    ],
+) -> None:
+    client, session_factory, _, _ = postgres_api
+    due = create_target(client, "Due", "https://due.example.com")
+    disabled = create_target(
+        client,
+        "Disabled",
+        "https://disabled.example.com",
+        enabled=False,
+    )
+    future = create_target(client, "Future", "https://future.example.com")
+    now = datetime(2026, 9, 27, 14, 0, tzinfo=UTC)
+    monitored_urls: list[str] = []
+
+    async def monitor(url: str) -> MonitorOutcome:
+        monitored_urls.append(url)
+        return healthy_outcome()
+
+    async def sleep(_: float) -> None:
+        raise AssertionError("A healthy check must not retry")
+
+    settings = Settings(
+        database_url="postgresql+psycopg://unused/unused",
+        auth_issuer="",
+        auth_audience="",
+        auth_jwks_url="",
+        auth_algorithms=("RS256",),
+        auth_authorized_parties=(),
+        cors_origins=(),
+        scheduler_max_concurrency=2,
+        scheduler_batch_size=2,
+    )
+
+    async def arrange_run_and_read() -> tuple[int, Target, list[CheckResult]]:
+        target_ids = [
+            UUID(due["id"]),
+            UUID(disabled["id"]),
+            UUID(future["id"]),
+        ]
+        async with session_factory() as session:
+            targets = {
+                target.id: target
+                for target in await session.scalars(
+                    select(Target).where(Target.id.in_(target_ids))
+                )
+            }
+            targets[UUID(due["id"])].next_check_at = now
+            targets[UUID(disabled["id"])].next_check_at = now
+            targets[UUID(future["id"])].next_check_at = now + timedelta(minutes=1)
+            await session.commit()
+
+        completed = await run_scheduler_once(
+            session_factory=session_factory,
+            settings=settings,
+            monitor=monitor,
+            sleep=sleep,
+            clock=lambda: now,
+        )
+        async with session_factory() as session:
+            scheduled_target = await session.get(Target, UUID(due["id"]))
+            results = list(
+                await session.scalars(
+                    select(CheckResult).where(
+                        CheckResult.target_id == UUID(due["id"])
+                    )
+                )
+            )
+        assert scheduled_target is not None
+        return completed, scheduled_target, results
+
+    completed, scheduled_target, results = run_async(arrange_run_and_read())
+
+    assert completed == 1
+    assert monitored_urls == [due["url"]]
+    assert len(results) == 1
+    assert results[0].checked_at == now
+    assert scheduled_target.next_check_at == now + timedelta(
+        seconds=due["check_interval_seconds"]
+    )
+    assert scheduled_target.scheduler_claim_token is None
+    assert scheduled_target.scheduler_claimed_until is None
 
 
 def test_retention_maintenance_removes_only_expired_results(

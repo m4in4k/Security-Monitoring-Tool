@@ -6,21 +6,17 @@ HTTP and HTTPS targets, retains their historical results, and presents
 availability, uptime, latency, TLS, and basic security-header information in one
 interface.
 
-> **Current stage:** Phase 4 adds paginated and date-filtered monitoring history,
-> historical uptime and response-time metrics, configurable result retention,
-> and target-detail charts. Phase 3's authentication and per-user ownership
-> remain the security foundation for every historical query.
+> **Current stage:** Phase 5 adds automatic scheduled checks through a dedicated,
+> database-coordinated worker. Multiple scheduler processes can share work safely
+> without placing a scheduler inside each FastAPI process.
 
 ## Current release
 
-**v0.4.0 — Historical Monitoring Results**
+**v0.5.0 — Scheduled Checks**
 
-Phase 4 adds a protected monitoring-history API with pagination and date-range
-filters, full-range uptime and response-time calculations, bounded chart
-series, configurable retention, and target-detail pages with real status and
-latency charts.
-
-See the [v0.4.0 release](https://github.com/m4in4k/Security-Monitoring-Tool/releases/tag/v0.4.0).
+Phase 5 adds enabled-and-due target selection, interval-aware scheduling,
+bounded outbound concurrency, retry and backoff rules, and PostgreSQL row-lock
+coordination for safe multi-worker operation.
 
 ## Features
 
@@ -31,6 +27,9 @@ See the [v0.4.0 release](https://github.com/m4in4k/Security-Monitoring-Tool/rele
 - Target name, URL, enabled-state, and check-interval validation
 - Duplicate-target prevention through normalized URLs
 - Manual **Check now** monitoring actions
+- Automatic interval-based monitoring from a standalone scheduler worker
+- PostgreSQL-coordinated due-target claims for safe multi-worker operation
+- Configurable scheduler concurrency, batch size, polling, retries, and backoff
 - Paginated monitoring history with timezone-aware date-range filtering
 - Historical uptime, average response time, and response-time range metrics
 - Target-detail pages with response-time and status-history charts
@@ -181,6 +180,25 @@ CLERK_SECRET_KEY=sk_test_replace_me
 The dashboard remains on a setup screen until Clerk is configured. Secret keys,
 local environment files, and bearer tokens must never be committed.
 
+### 5. Start scheduled monitoring
+
+Run the scheduler as a separate process from FastAPI:
+
+```powershell
+.venv\Scripts\python.exe -m app.scheduler
+```
+
+The installed console command is `sekuro-scheduler`. Multiple scheduler workers
+may run against the same PostgreSQL database: due targets are claimed in a short
+transaction with `FOR UPDATE SKIP LOCKED`, and their next occurrence is reserved
+before the outbound request begins. Do not start this loop from FastAPI's
+application lifespan.
+
+The defaults poll every 5 seconds, run at most 10 outbound checks concurrently,
+claim 10 targets per batch with a five-minute recovery lease, and make up to 3
+attempts using bounded exponential backoff. Override them with the `SCHEDULER_*`
+variables documented in `.env.example`.
+
 ## API endpoints
 
 | Method | Endpoint | Description |
@@ -229,7 +247,9 @@ POST /targets/{target_id}/checks
 ```
 
 Manual checks are allowed when a target is disabled. The `enabled` flag controls
-future scheduled monitoring; it does not prevent an authorized diagnostic check.
+scheduled monitoring; it does not prevent an authorized diagnostic check. New
+targets are initially due, and each scheduler claim advances `next_check_at` by
+that target's `check_interval_seconds`.
 If a target is deleted while a check is running, the check returns `409 Conflict`
 and does not leave an orphaned result.
 
@@ -297,11 +317,14 @@ The verified checks include:
 - Two-user authorization tests for list, read, update, delete, and manual checks
 - Real PostgreSQL integration coverage for ownership and user provisioning
 - Real PostgreSQL integration coverage for history, uptime, and retention
+- Controlled-time scheduler tests for due selection and interval advancement
+- Scheduler tests for concurrency limits and bounded exponential backoff
+- PostgreSQL integration coverage for concurrent, duplicate-free target claims
 - Target-detail response-time and status charts
 - ESLint and TypeScript checks
 - Successful frontend production build
 
-The v0.4.0 verification run completed with 81 passing backend tests, including
+The v0.5.0 verification run completed with 88 passing backend tests, including
 the isolated PostgreSQL integration suite.
 
 ## Run validation locally
@@ -347,7 +370,7 @@ npm run build
 - [x] Add PostgreSQL integration tests
 - [x] Add authentication and target ownership
 - [x] Add historical monitoring results, uptime metrics, retention, and charts
-- [ ] Add scheduled checks
+- [x] Add scheduled checks
 - [ ] Add persisted incidents and alerts
 - [ ] Add full-stack containers, CI, staging, and deployment
 

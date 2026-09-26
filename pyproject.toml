@@ -1,6 +1,6 @@
 [project]
 name = "sekuro"
-version = "0.3.0"
+version = "0.5.0"
 description = "The API for the Sekuro availability and security monitoring platform."
 requires-python = ">=3.12"
 dependencies = [
@@ -27,6 +27,7 @@ build-backend = "setuptools.build_meta"
 [project.scripts]
 sekuro-api = "app.server:main"
 sekuro-prune-history = "app.retention:main"
+sekuro-scheduler = "app.scheduler:main"
 
 [tool.setuptools.packages.find]
 include = ["app*"]

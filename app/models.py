@@ -77,6 +77,14 @@ class Target(Base):
         default=300,
         server_default="300",
     )
+    next_check_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    scheduler_claim_token: Mapped[UUID | None] = mapped_column()
+    scheduler_claimed_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -107,6 +115,13 @@ Index(
     Target.owner_id,
     Target.created_at.desc(),
     Target.id.desc(),
+)
+
+Index(
+    "ix_targets_due",
+    Target.next_check_at,
+    Target.id,
+    postgresql_where=Target.enabled.is_(True),
 )
 
 

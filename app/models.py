@@ -10,6 +10,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -102,6 +103,14 @@ class CheckResult(Base):
     security_findings: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     target: Mapped[Target] = relationship(back_populates="check_results")
+
+
+Index(
+    "ix_check_results_target_latest",
+    CheckResult.target_id,
+    CheckResult.checked_at.desc(),
+    CheckResult.id.desc(),
+)
 
 
 class Incident(Base):

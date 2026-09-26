@@ -123,3 +123,12 @@ class TargetRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     latest_check: CheckResultRead | None = None
+
+
+class TargetPage(BaseModel):
+    """One page of monitored targets and pagination metadata."""
+
+    items: list[TargetRead]
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1, le=100)
+    offset: int = Field(ge=0)

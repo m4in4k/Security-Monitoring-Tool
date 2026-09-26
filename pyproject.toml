@@ -31,4 +31,7 @@ exclude = ["frontend*", "migrations*", "tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: tests that require the isolated PostgreSQL test service",
+]
 

@@ -26,6 +26,23 @@ class FakeScalarResult:
         return iter(self.targets)
 
 
+class FakeRowResult:
+    """Small row result matching the APIs used by the optimized query."""
+
+    def __init__(self, rows: list[tuple[Target, CheckResult | None]]) -> None:
+        self.rows = rows
+
+    def all(self) -> list[tuple[Target, CheckResult | None]]:
+        return self.rows
+
+    def one_or_none(self) -> tuple[Target, CheckResult | None] | None:
+        if not self.rows:
+            return None
+        if len(self.rows) > 1:
+            raise AssertionError("Expected at most one row")
+        return self.rows[0]
+
+
 class FakeSession:
     """In-memory AsyncSession substitute for request behavior tests."""
 
@@ -71,9 +88,49 @@ class FakeSession:
 
     async def delete(self, target: Target) -> None:
         self.targets.pop(target.id, None)
+        self.check_results = [
+            result for result in self.check_results if result.target_id != target.id
+        ]
 
     async def rollback(self) -> None:
         return None
+
+    async def scalar(self, statement: Any) -> int | UUID | None:
+        params = statement.compile().params.values()
+        target_ids = [value for value in params if isinstance(value, UUID)]
+        if target_ids:
+            target_id = target_ids[0]
+            return target_id if target_id in self.targets else None
+        return len(self.targets)
+
+    async def execute(self, statement: Any) -> FakeRowResult:
+        params = statement.compile().params.values()
+        target_ids = [value for value in params if isinstance(value, UUID)]
+        targets = list(self.targets.values())
+        if target_ids:
+            targets = [target for target in targets if target.id == target_ids[0]]
+
+        targets.sort(key=lambda target: (target.created_at, target.id), reverse=True)
+        offset_clause = getattr(statement, "_offset_clause", None)
+        limit_clause = getattr(statement, "_limit_clause", None)
+        offset = int(offset_clause.value) if offset_clause is not None else 0
+        limit = int(limit_clause.value) if limit_clause is not None else len(targets)
+        targets = targets[offset : offset + limit]
+
+        rows: list[tuple[Target, CheckResult | None]] = []
+        for target in targets:
+            checks = [
+                result
+                for result in self.check_results
+                if result.target_id == target.id
+            ]
+            latest = max(
+                checks,
+                key=lambda result: (result.checked_at, result.id),
+                default=None,
+            )
+            rows.append((target, latest))
+        return FakeRowResult(rows)
 
     async def scalars(self, statement: Any) -> FakeScalarResult:
         entity = statement.column_descriptions[0].get("entity")
@@ -117,7 +174,12 @@ def create_target(client: TestClient, name: str, url: str) -> dict[str, Any]:
 def test_target_crud_lifecycle(api: tuple[TestClient, FakeSession]) -> None:
     client, _ = api
 
-    assert client.get("/targets").json() == []
+    assert client.get("/targets").json() == {
+        "items": [],
+        "total": 0,
+        "limit": 20,
+        "offset": 0,
+    }
 
     created = create_target(client, "  Portfolio  ", "https://example.com")
     target_id = created["id"]
@@ -140,7 +202,8 @@ def test_target_crud_lifecycle(api: tuple[TestClient, FakeSession]) -> None:
 
     list_response = client.get("/targets")
     assert list_response.status_code == 200
-    assert [target["id"] for target in list_response.json()] == [target_id]
+    assert [target["id"] for target in list_response.json()["items"]] == [target_id]
+    assert list_response.json()["total"] == 1
 
     delete_response = client.delete(f"/targets/{target_id}")
     assert delete_response.status_code == 204
@@ -261,7 +324,17 @@ def test_manual_check_persists_monitoring_result(
 
     targets_response = client.get("/targets")
     assert targets_response.status_code == 200
-    assert targets_response.json()[0]["latest_check"]["response_time_ms"] == 87
+    latest_from_list = targets_response.json()["items"][0]["latest_check"]
+    assert latest_from_list["response_time_ms"] == 87
+
+    read_response = client.get(f"/targets/{target['id']}")
+    assert read_response.json()["latest_check"]["response_time_ms"] == 87
+
+    update_response = client.patch(
+        f"/targets/{target['id']}",
+        json={"name": "Updated target"},
+    )
+    assert update_response.json()["latest_check"]["response_time_ms"] == 87
 
 
 def test_manual_check_rejects_unsafe_target(
@@ -281,5 +354,100 @@ def test_manual_check_rejects_unsafe_target(
     assert response.status_code == 400
     assert response.json() == {
         "detail": "Target resolves to a non-public IP address"
+    }
+    assert session.check_results == []
+
+
+def test_target_list_is_paginated(api: tuple[TestClient, FakeSession]) -> None:
+    client, _ = api
+    first = create_target(client, "First", "https://first.example.com")
+    second = create_target(client, "Second", "https://second.example.com")
+    third = create_target(client, "Third", "https://third.example.com")
+
+    response = client.get("/targets?limit=1&offset=1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 3
+    assert body["limit"] == 1
+    assert body["offset"] == 1
+    assert [item["id"] for item in body["items"]] == [second["id"]]
+    assert first["id"] != third["id"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["limit=0", "limit=101", "offset=-1"],
+)
+def test_target_list_rejects_invalid_pagination(
+    api: tuple[TestClient, FakeSession],
+    query: str,
+) -> None:
+    client, _ = api
+
+    assert client.get(f"/targets?{query}").status_code == 422
+
+
+def test_manual_check_is_allowed_for_disabled_target(
+    api: tuple[TestClient, FakeSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = api
+    response = client.post(
+        "/targets",
+        json={
+            "name": "Disabled target",
+            "url": "https://example.com",
+            "enabled": False,
+        },
+    )
+    target = response.json()
+
+    async def successful_check(_: str) -> MonitorOutcome:
+        return MonitorOutcome(
+            status="Healthy",
+            http_status_code=200,
+            response_time_ms=25,
+            error_message=None,
+            tls_expires_at=None,
+            security_score=100,
+            security_findings={"missing": []},
+        )
+
+    monkeypatch.setattr(targets_module, "monitor_url", successful_check)
+
+    check_response = client.post(f"/targets/{target['id']}/checks")
+
+    assert check_response.status_code == 201
+    assert check_response.json()["status"] == "Healthy"
+
+
+def test_check_returns_conflict_if_target_is_deleted_while_running(
+    api: tuple[TestClient, FakeSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, session = api
+    target = create_target(client, "Target", "https://example.com")
+    target_id = UUID(target["id"])
+
+    async def delete_during_check(_: str) -> MonitorOutcome:
+        session.targets.pop(target_id)
+        return MonitorOutcome(
+            status="Healthy",
+            http_status_code=200,
+            response_time_ms=25,
+            error_message=None,
+            tls_expires_at=None,
+            security_score=100,
+            security_findings={"missing": []},
+        )
+
+    monkeypatch.setattr(targets_module, "monitor_url", delete_during_check)
+
+    response = client.post(f"/targets/{target['id']}/checks")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "Target was deleted while the check was running"
     }
     assert session.check_results == []

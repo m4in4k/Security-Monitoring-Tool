@@ -35,6 +35,13 @@ export type CreateTargetInput = {
   url: string;
 };
 
+export type TargetPage = {
+  items: Target[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"
 ).replace(/\/$/, "");
@@ -91,8 +98,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function getTargets(signal?: AbortSignal): Promise<Target[]> {
-  return request<Target[]>("/targets", { signal });
+export async function getTargets(signal?: AbortSignal): Promise<Target[]> {
+  const pageSize = 100;
+  const targets: Target[] = [];
+  let offset = 0;
+
+  while (true) {
+    const page = await request<TargetPage>(
+      `/targets?limit=${pageSize}&offset=${offset}`,
+      { signal },
+    );
+    targets.push(...page.items);
+    offset += page.items.length;
+    if (offset >= page.total || page.items.length === 0) return targets;
+  }
 }
 
 export function createTarget(input: CreateTargetInput): Promise<Target> {

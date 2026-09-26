@@ -5,9 +5,10 @@ FastAPI, PostgreSQL, and a responsive React dashboard. It monitors authorized
 HTTP and HTTPS targets, records their latest results, and presents availability,
 latency, TLS, and basic security-header information in one interface.
 
-> **Current stage:** Phase 1 is complete. Target persistence, manual security
-> checks, and the live API-backed dashboard are implemented and verified against
-> PostgreSQL 16. API consistency and scalability are the next milestone.
+> **Current stage:** Phase 2 is implemented and locally verified. Target
+> responses are consistent, list queries are paginated and index-backed, running
+> checks handle concurrent deletion, and real PostgreSQL integration tests cover
+> the database behavior required before scheduled monitoring is introduced.
 
 ## Current release
 
@@ -150,7 +151,7 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | `GET` | `/health` | Confirm that the API process is running |
-| `GET` | `/targets` | List targets with their latest persisted check |
+| `GET` | `/targets?limit=20&offset=0` | List a page of targets with their latest persisted check |
 | `POST` | `/targets` | Create a monitored target |
 | `GET` | `/targets/{id}` | Read one target |
 | `PATCH` | `/targets/{id}` | Update selected target fields |
@@ -160,6 +161,10 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 Only HTTP and HTTPS URLs on ports 80 and 443 are accepted. URLs containing
 credentials or fragments are rejected.
 
+`GET /targets` accepts `limit` from 1 to 100 and a non-negative `offset`. Its
+response contains `items`, `total`, `limit`, and `offset`. List, single-target,
+and update responses all include the same `latest_check` field.
+
 ## Run a monitoring check
 
 Create a target through the dashboard or `POST /targets`, then run:
@@ -167,6 +172,11 @@ Create a target through the dashboard or `POST /targets`, then run:
 ```text
 POST /targets/{target_id}/checks
 ```
+
+Manual checks are allowed when a target is disabled. The `enabled` flag controls
+future scheduled monitoring; it does not prevent an authorized diagnostic check.
+If a target is deleted while a check is running, the check returns `409 Conflict`
+and does not leave an orphaned result.
 
 The result records:
 
@@ -202,7 +212,7 @@ monitor third-party systems without explicit permission.
 
 ## Verification
 
-Phase 1 was verified through the complete flow:
+The current implementation was verified through the complete flow:
 
 ```text
 Dashboard -> FastAPI -> PostgreSQL -> monitoring result -> dashboard
@@ -219,7 +229,7 @@ The verified checks include:
 - Persistence after browser reload
 - Desktop and mobile layouts
 - Browser console and error-overlay checks
-- 49 passing backend tests
+- 61 passing backend tests, including 6 real PostgreSQL integration tests
 - ESLint and TypeScript checks
 - Successful frontend production build
 
@@ -231,6 +241,16 @@ Backend:
 .venv\Scripts\python.exe -m pytest -q
 .venv\Scripts\python.exe -m alembic check
 ```
+
+Real PostgreSQL integration tests use the isolated, temporary test service:
+
+```powershell
+docker compose --profile test up -d --wait postgres-test
+$env:TEST_DATABASE_URL = "postgresql+psycopg://sekuro_test:sekuro_test@localhost:5433/sekuro_test"
+.venv\Scripts\python.exe -m pytest -q -m integration
+```
+
+The integration suite refuses to run unless the database name contains `test`.
 
 Frontend:
 
@@ -251,8 +271,9 @@ npm run build
 - [x] Add response-time, TLS-expiry, and security-header checks
 - [x] Connect the dashboard to live API and PostgreSQL data
 - [x] Verify the complete Phase 1 flow against PostgreSQL 16
-- [ ] Improve API consistency and latest-result query performance
-- [ ] Add PostgreSQL integration tests
+- [x] Improve API consistency and latest-result query performance
+- [x] Add paginated target listing and deletion-race handling
+- [x] Add PostgreSQL integration tests
 - [ ] Add historical monitoring results and metrics
 - [ ] Add scheduled checks
 - [ ] Add persisted incidents and alerts

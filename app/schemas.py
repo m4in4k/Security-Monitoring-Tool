@@ -110,6 +110,17 @@ class CheckResultRead(BaseModel):
     security_findings: dict[str, object] | None
 
 
+class CheckHistorySummary(BaseModel):
+    """Aggregates calculated across the complete selected history range."""
+
+    total_checks: int = Field(ge=0)
+    available_checks: int = Field(ge=0)
+    uptime_percentage: float | None = Field(default=None, ge=0, le=100)
+    average_response_time_ms: float | None = Field(default=None, ge=0)
+    minimum_response_time_ms: int | None = Field(default=None, ge=0)
+    maximum_response_time_ms: int | None = Field(default=None, ge=0)
+
+
 class UserRead(BaseModel):
     """Public representation of the authenticated Sekuro user."""
 
@@ -141,6 +152,18 @@ class TargetPage(BaseModel):
     """One page of monitored targets and pagination metadata."""
 
     items: list[TargetRead]
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1, le=100)
+    offset: int = Field(ge=0)
+
+
+class CheckHistoryPage(BaseModel):
+    """One filtered page of monitoring history with target and uptime details."""
+
+    target: TargetRead
+    items: list[CheckResultRead]
+    series: list[CheckResultRead]
+    summary: CheckHistorySummary
     total: int = Field(ge=0)
     limit: int = Field(ge=1, le=100)
     offset: int = Field(ge=0)

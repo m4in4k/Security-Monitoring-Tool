@@ -185,6 +185,7 @@ local environment files, and bearer tokens must never be committed.
 | `GET` | `/targets/{id}` | Read one target |
 | `PATCH` | `/targets/{id}` | Update selected target fields |
 | `DELETE` | `/targets/{id}` | Delete a target and its monitoring history |
+| `GET` | `/targets/{id}/checks?limit=50&offset=0&from=...&to=...` | Read paginated history and uptime metrics |
 | `POST` | `/targets/{id}/checks` | Run and persist one protected monitoring check |
 
 `GET /health` is public. Every user and target endpoint requires a valid bearer
@@ -197,6 +198,20 @@ credentials or fragments are rejected.
 `GET /targets` accepts `limit` from 1 to 100 and a non-negative `offset`. Its
 response contains `items`, `total`, `limit`, and `offset`. List, single-target,
 and update responses all include the same `latest_check` field.
+
+`GET /targets/{id}/checks` accepts the same pagination bounds plus optional
+timezone-aware ISO 8601 `from` (inclusive) and `to` (exclusive) values. It
+returns the target, the selected page of status and response-time results, and
+aggregates calculated over the complete filtered range. The separate `series`
+field contains at most 500 evenly sampled chart points across the entire range,
+including its first and last results. `Healthy` and `Warning` checks count as
+available; `Down` checks count as downtime.
+
+Old monitoring results are retained for 90 days by default. Set
+`HISTORY_RETENTION_DAYS` to a positive integer to change the policy. Cleanup is
+applied transactionally whenever a new result is persisted. Workers and
+maintenance jobs can enforce it independently by running
+`sekuro-prune-history` (or `python -m app.retention`).
 
 ## Run a monitoring check
 
@@ -315,7 +330,7 @@ npm run build
 - [x] Add paginated target listing and deletion-race handling
 - [x] Add PostgreSQL integration tests
 - [x] Add authentication and target ownership
-- [ ] Add historical monitoring results and metrics
+- [x] Add historical monitoring results, uptime metrics, retention, and charts
 - [ ] Add scheduled checks
 - [ ] Add persisted incidents and alerts
 - [ ] Add full-stack containers, CI, staging, and deployment

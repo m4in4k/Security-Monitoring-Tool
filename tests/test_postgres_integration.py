@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import os
 import sys
 from threading import Event
@@ -34,6 +34,7 @@ from app.database import get_session
 from app.main import app
 from app.models import CheckResult, User
 from app.monitoring import MonitorOutcome
+from app.retention import prune_expired_check_results
 
 
 pytestmark = pytest.mark.integration
@@ -214,6 +215,118 @@ def test_latest_check_is_consistent_and_deterministic(
     for response_target in (listed, read, updated):
         assert response_target["latest_check"]["id"] == second_id
         assert response_target["latest_check"]["response_time_ms"] == 80
+
+
+def test_history_filters_paginates_calculates_uptime_and_enforces_ownership(
+    postgres_api: tuple[TestClient, async_sessionmaker[AsyncSession], dict[str, User], tuple[User, User]],
+) -> None:
+    client, session_factory, active_user, (_, bob) = postgres_api
+    target = create_target(client, "Target", "https://example.com")
+    target_id = UUID(target["id"])
+    base_time = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
+
+    async def insert_history() -> None:
+        async with session_factory() as session:
+            session.add_all(
+                [
+                    CheckResult(
+                        target_id=target_id,
+                        checked_at=base_time + timedelta(days=index),
+                        status=status,
+                        http_status_code=code,
+                        response_time_ms=response_time,
+                        error_message=None,
+                        tls_expires_at=None,
+                        security_score=90,
+                        security_findings={},
+                    )
+                    for index, (status, code, response_time) in enumerate(
+                        [
+                            ("Healthy", 200, 40),
+                            ("Warning", 404, 80),
+                            ("Down", None, None),
+                            ("Healthy", 200, 120),
+                        ]
+                    )
+                ]
+            )
+            await session.commit()
+
+    run_async(insert_history())
+    response = client.get(
+        f"/targets/{target_id}/checks",
+        params={
+            "limit": 2,
+            "offset": 0,
+            "from": (base_time + timedelta(days=1)).isoformat(),
+            "to": (base_time + timedelta(days=4)).isoformat(),
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 3
+    assert [item["status"] for item in body["items"]] == ["Healthy", "Down"]
+    assert [item["status"] for item in body["series"]] == [
+        "Warning",
+        "Down",
+        "Healthy",
+    ]
+    assert body["summary"] == {
+        "total_checks": 3,
+        "available_checks": 2,
+        "uptime_percentage": 66.667,
+        "average_response_time_ms": 100.0,
+        "minimum_response_time_ms": 80,
+        "maximum_response_time_ms": 120,
+    }
+
+    active_user["value"] = bob
+    assert client.get(f"/targets/{target_id}/checks").status_code == 404
+
+
+def test_retention_maintenance_removes_only_expired_results(
+    postgres_api: tuple[TestClient, async_sessionmaker[AsyncSession], dict[str, User], tuple[User, User]],
+) -> None:
+    client, session_factory, _, _ = postgres_api
+    target = create_target(client, "Target", "https://example.com")
+    target_id = UUID(target["id"])
+    now = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
+
+    async def seed_and_prune() -> tuple[int, list[datetime]]:
+        async with session_factory() as session:
+            session.add_all(
+                [
+                    CheckResult(
+                        target_id=target_id,
+                        checked_at=checked_at,
+                        **asdict(healthy_outcome()),
+                    )
+                    for checked_at in (
+                        now - timedelta(days=31),
+                        now - timedelta(days=30),
+                        now - timedelta(days=1),
+                    )
+                ]
+            )
+            await session.flush()
+            deleted = await prune_expired_check_results(
+                session,
+                now=now,
+                retention_days=30,
+            )
+            await session.commit()
+            remaining = list(
+                await session.scalars(
+                    select(CheckResult.checked_at).order_by(CheckResult.checked_at)
+                )
+            )
+            return deleted, remaining
+
+    deleted, remaining = run_async(seed_and_prune())
+
+    assert deleted == 1
+    assert remaining == [now - timedelta(days=30), now - timedelta(days=1)]
 
 
 def test_pagination_and_database_uniqueness(

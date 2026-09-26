@@ -26,6 +26,7 @@ build-backend = "setuptools.build_meta"
 
 [project.scripts]
 sekuro-api = "app.server:main"
+sekuro-prune-history = "app.retention:main"
 
 [tool.setuptools.packages.find]
 include = ["app*"]

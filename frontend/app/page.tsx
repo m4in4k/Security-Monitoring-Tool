@@ -38,6 +38,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import Link from "next/link";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -600,7 +601,7 @@ export default function Home() {
                     const checking = checkingIds.has(target.id);
                     return (
                       <TableRow key={target.id} className="border-white/[0.06] hover:bg-white/[0.025]">
-                        <TableCell className="py-4 pl-6"><div className="flex items-center gap-3"><span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-white/[0.07] bg-white/[0.035] text-slate-400"><Globe2 className="size-4" /></span><span><span className="block text-sm font-medium text-slate-200">{target.name}</span><span className="mt-0.5 block max-w-52 truncate text-xs text-slate-600">{target.url}</span></span></div></TableCell>
+                        <TableCell className="py-4 pl-6"><Link href={`/targets/${target.id}`} className="flex items-center gap-3 rounded-md outline-none ring-blue-400 transition hover:text-white focus-visible:ring-2"><span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-white/[0.07] bg-white/[0.035] text-slate-400"><Globe2 className="size-4" /></span><span><span className="block text-sm font-medium text-slate-200">{target.name}</span><span className="mt-0.5 block max-w-52 truncate text-xs text-slate-600">{target.url}</span></span></Link></TableCell>
                         <TableCell><Badge variant="outline" className={`gap-1.5 font-medium ${statusStyles(status)}`}><span className="size-1.5 rounded-full bg-current" />{status}</Badge></TableCell>
                         <TableCell className="text-sm text-slate-300">{check?.http_status_code ?? "—"}</TableCell>
                         <TableCell className="text-sm text-slate-300">{check?.response_time_ms === null || check?.response_time_ms === undefined ? "Pending" : `${check.response_time_ms} ms`}</TableCell>

@@ -1,7 +1,7 @@
 """Request-level tests for the monitored-target API."""
 
 from collections.abc import AsyncIterator, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -30,8 +30,14 @@ class FakeScalarResult:
 class FakeRowResult:
     """Small row result matching the APIs used by the optimized query."""
 
-    def __init__(self, rows: list[tuple[Target, CheckResult | None]]) -> None:
+    def __init__(
+        self,
+        rows: list[tuple[Target, CheckResult | None]],
+        *,
+        rowcount: int = 0,
+    ) -> None:
         self.rows = rows
+        self.rowcount = rowcount
 
     def all(self) -> list[tuple[Target, CheckResult | None]]:
         return self.rows
@@ -42,6 +48,16 @@ class FakeRowResult:
         if len(self.rows) > 1:
             raise AssertionError("Expected at most one row")
         return self.rows[0]
+
+
+class FakeAggregateResult:
+    """Aggregate row returned by the history-summary query."""
+
+    def __init__(self, row: tuple[int, int, float | None, int | None, int | None]) -> None:
+        self.row = row
+
+    def one(self) -> tuple[int, int, float | None, int | None, int | None]:
+        return self.row
 
 
 class FakeSession:
@@ -115,7 +131,58 @@ class FakeSession:
             return sum(target.owner_id in ids for target in self.targets.values())
         return len(self.targets)
 
-    async def execute(self, statement: Any) -> FakeRowResult:
+    async def execute(self, statement: Any) -> FakeRowResult | FakeAggregateResult:
+        if getattr(statement, "is_delete", False):
+            cutoff = next(
+                (
+                    value
+                    for value in statement.compile().params.values()
+                    if isinstance(value, datetime)
+                ),
+                None,
+            )
+            if cutoff is not None:
+                previous_count = len(self.check_results)
+                self.check_results = [
+                    result
+                    for result in self.check_results
+                    if result.checked_at >= cutoff
+                ]
+                return FakeRowResult(
+                    [],
+                    rowcount=previous_count - len(self.check_results),
+                )
+            return FakeRowResult([])
+
+        if len(statement.column_descriptions) == 5:
+            ids = [
+                value
+                for value in statement.compile().params.values()
+                if isinstance(value, UUID)
+            ]
+            checks = [
+                result
+                for result in self.check_results
+                if not ids or result.target_id in ids
+            ]
+            response_times = [
+                result.response_time_ms
+                for result in checks
+                if result.response_time_ms is not None
+            ]
+            available = sum(
+                result.status in {"Healthy", "Warning"} for result in checks
+            )
+            return FakeAggregateResult(
+                (
+                    len(checks),
+                    available,
+                    sum(response_times) / len(response_times) if response_times else None,
+                    min(response_times, default=None),
+                    max(response_times, default=None),
+                )
+            )
+
         params = statement.compile().params.values()
         ids = [value for value in params if isinstance(value, UUID)]
         target_ids = [value for value in ids if value in self.targets]
@@ -151,11 +218,40 @@ class FakeSession:
     async def scalars(self, statement: Any) -> FakeScalarResult:
         entity = statement.column_descriptions[0].get("entity")
         if entity is CheckResult:
-            results = sorted(
-                self.check_results,
-                key=lambda result: (str(result.target_id), result.checked_at),
+            ids = [
+                value
+                for value in statement.compile().params.values()
+                if isinstance(value, UUID)
+            ]
+            results = list(
+                (
+                    result
+                    for result in self.check_results
+                    if not ids or result.target_id in ids
+                )
+            )
+            execution_options = statement.get_execution_options()
+            series_stride = execution_options.get("history_series_stride")
+            if series_stride is not None:
+                results.sort(key=lambda result: (result.checked_at, result.id))
+                series_total = execution_options["history_series_total"]
+                results = [
+                    result
+                    for position, result in enumerate(results, start=1)
+                    if (position - 1) % series_stride == 0
+                    or position == series_total
+                ]
+                return FakeScalarResult(results)  # type: ignore[arg-type]
+
+            results.sort(
+                key=lambda result: (result.checked_at, result.id),
                 reverse=True,
             )
+            offset_clause = getattr(statement, "_offset_clause", None)
+            limit_clause = getattr(statement, "_limit_clause", None)
+            offset = int(offset_clause.value) if offset_clause is not None else 0
+            limit = int(limit_clause.value) if limit_clause is not None else len(results)
+            results = results[offset : offset + limit]
             return FakeScalarResult(results)  # type: ignore[arg-type]
 
         targets = sorted(
@@ -365,6 +461,141 @@ def test_manual_check_persists_monitoring_result(
         json={"name": "Updated target"},
     )
     assert update_response.json()["latest_check"]["response_time_ms"] == 87
+
+
+def test_check_history_returns_paginated_results_and_uptime_summary(
+    api: tuple[TestClient, FakeSession],
+) -> None:
+    client, session = api
+    target = create_target(client, "Target", "https://example.com")
+    target_id = UUID(target["id"])
+    now = datetime.now(UTC)
+    outcomes = [
+        ("Healthy", 80),
+        ("Warning", 120),
+        ("Down", None),
+    ]
+    for index, (status_name, response_time) in enumerate(outcomes, start=1):
+        session.add(
+            CheckResult(
+                target_id=target_id,
+                checked_at=now.replace(microsecond=index),
+                status=status_name,
+                http_status_code=200 if response_time is not None else None,
+                response_time_ms=response_time,
+                error_message=None,
+                tls_expires_at=None,
+                security_score=90,
+                security_findings={},
+            )
+        )
+
+    response = client.get(f"/targets/{target_id}/checks?limit=2&offset=0")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["target"]["id"] == str(target_id)
+    assert body["total"] == 3
+    assert [item["status"] for item in body["items"]] == ["Down", "Warning"]
+    assert [item["status"] for item in body["series"]] == [
+        "Healthy",
+        "Warning",
+        "Down",
+    ]
+    assert body["summary"] == {
+        "total_checks": 3,
+        "available_checks": 2,
+        "uptime_percentage": 66.667,
+        "average_response_time_ms": 100.0,
+        "minimum_response_time_ms": 80,
+        "maximum_response_time_ms": 120,
+    }
+
+
+def test_check_history_chart_series_is_bounded_and_spans_the_range(
+    api: tuple[TestClient, FakeSession],
+) -> None:
+    client, session = api
+    target = create_target(client, "Target", "https://example.com")
+    target_id = UUID(target["id"])
+    for response_time in range(501):
+        session.add(
+            CheckResult(
+                target_id=target_id,
+                status="Healthy",
+                http_status_code=200,
+                response_time_ms=response_time,
+                error_message=None,
+                tls_expires_at=None,
+                security_score=100,
+                security_findings={},
+            )
+        )
+
+    body = client.get(f"/targets/{target_id}/checks?limit=1").json()
+
+    assert body["total"] == 501
+    assert len(body["items"]) == 1
+    assert len(body["series"]) <= 500
+    assert body["series"][0]["response_time_ms"] == 0
+    assert body["series"][-1]["response_time_ms"] == 500
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "limit=0",
+        "limit=101",
+        "offset=-1",
+        "from=2026-09-26T12:00:00&to=2026-09-26T13:00:00Z",
+        "from=2026-09-27T12:00:00Z&to=2026-09-26T12:00:00Z",
+    ],
+)
+def test_check_history_rejects_invalid_ranges_and_pagination(
+    api: tuple[TestClient, FakeSession],
+    query: str,
+) -> None:
+    client, _ = api
+    target = create_target(client, "Target", "https://example.com")
+
+    assert client.get(f"/targets/{target['id']}/checks?{query}").status_code == 422
+
+
+def test_new_check_removes_results_older_than_retention_window(
+    api: tuple[TestClient, FakeSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, session = api
+    target = create_target(client, "Target", "https://example.com")
+    old_result = CheckResult(
+        target_id=UUID(target["id"]),
+        status="Healthy",
+        http_status_code=200,
+        response_time_ms=10,
+        error_message=None,
+        tls_expires_at=None,
+        security_score=100,
+        security_findings={},
+    )
+    session.add(old_result)
+    old_result.checked_at = datetime.now(UTC) - timedelta(days=91)
+
+    async def successful_check(_: str) -> MonitorOutcome:
+        return MonitorOutcome(
+            status="Healthy",
+            http_status_code=200,
+            response_time_ms=20,
+            error_message=None,
+            tls_expires_at=None,
+            security_score=100,
+            security_findings={},
+        )
+
+    monkeypatch.setattr(targets_module, "monitor_url", successful_check)
+
+    assert client.post(f"/targets/{target['id']}/checks").status_code == 201
+    assert len(session.check_results) == 1
+    assert session.check_results[0].response_time_ms == 20
 
 
 def test_manual_check_rejects_unsafe_target(

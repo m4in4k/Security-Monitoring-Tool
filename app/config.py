@@ -26,6 +26,7 @@ class Settings:
     auth_algorithms: tuple[str, ...]
     auth_authorized_parties: tuple[str, ...]
     cors_origins: tuple[str, ...]
+    history_retention_days: int = 90
 
 
 @lru_cache
@@ -55,6 +56,9 @@ def get_settings() -> Settings:
         ).split(",")
         if origin.strip()
     )
+    history_retention_days = int(getenv("HISTORY_RETENTION_DAYS", "90"))
+    if history_retention_days < 1:
+        raise ValueError("HISTORY_RETENTION_DAYS must be at least 1")
     return Settings(
         database_url=getenv("DATABASE_URL", DEFAULT_DATABASE_URL),
         auth_issuer=issuer,
@@ -65,4 +69,5 @@ def get_settings() -> Settings:
         auth_algorithms=algorithms,
         auth_authorized_parties=authorized_parties,
         cors_origins=cors_origins,
+        history_retention_days=history_retention_days,
     )

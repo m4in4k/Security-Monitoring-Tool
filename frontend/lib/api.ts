@@ -42,6 +42,32 @@ export type TargetPage = {
   offset: number;
 };
 
+export type CheckHistorySummary = {
+  total_checks: number;
+  available_checks: number;
+  uptime_percentage: number | null;
+  average_response_time_ms: number | null;
+  minimum_response_time_ms: number | null;
+  maximum_response_time_ms: number | null;
+};
+
+export type CheckHistoryPage = {
+  target: Target;
+  items: CheckResult[];
+  series: CheckResult[];
+  summary: CheckHistorySummary;
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type CheckHistoryQuery = {
+  limit?: number;
+  offset?: number;
+  from?: string;
+  to?: string;
+};
+
 const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"
 ).replace(/\/$/, "");
@@ -140,4 +166,23 @@ export function runTargetCheck(
   return request<CheckResult>(`/targets/${targetId}/checks`, accessToken, {
     method: "POST",
   });
+}
+
+export function getTargetHistory(
+  targetId: string,
+  query: CheckHistoryQuery,
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<CheckHistoryPage> {
+  const search = new URLSearchParams();
+  if (query.limit !== undefined) search.set("limit", String(query.limit));
+  if (query.offset !== undefined) search.set("offset", String(query.offset));
+  if (query.from) search.set("from", query.from);
+  if (query.to) search.set("to", query.to);
+  const suffix = search.size ? `?${search.toString()}` : "";
+  return request<CheckHistoryPage>(
+    `/targets/${targetId}/checks${suffix}`,
+    accessToken,
+    { signal },
+  );
 }

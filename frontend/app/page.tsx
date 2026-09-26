@@ -1,6 +1,12 @@
 "use client";
 
 import {
+  RedirectToSignIn,
+  UserButton,
+  useAuth,
+  useUser,
+} from "@clerk/react";
+import {
   FormEvent,
   useCallback,
   useEffect,
@@ -156,6 +162,8 @@ function validateTargetForm(name: string, rawUrl: string): FieldErrors {
 }
 
 export default function Home() {
+  const { getToken, isLoaded: authLoaded, isSignedIn } = useAuth();
+  const { user } = useUser();
   const [targets, setTargets] = useState<Target[]>([]);
   const [activeFilter, setActiveFilter] = useState<Filter>("All");
   const [query, setQuery] = useState("");
@@ -176,11 +184,21 @@ export default function Home() {
     targetsRef.current = targets;
   }, [targets]);
 
+  const requireAccessToken = useCallback(async () => {
+    const accessToken = await getToken();
+    if (!accessToken) {
+      throw new ApiError("Your session expired. Please sign in again.", 401);
+    }
+    return accessToken;
+  }, [getToken]);
+
   const loadTargets = useCallback(async (signal?: AbortSignal) => {
+    if (!authLoaded || !isSignedIn) return;
     setLoading(true);
     setLoadError(null);
     try {
-      const data = await getTargets(signal);
+      const accessToken = await requireAccessToken();
+      const data = await getTargets(accessToken, signal);
       setTargets(data);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -188,7 +206,7 @@ export default function Home() {
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, []);
+  }, [authLoaded, isSignedIn, requireAccessToken]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -243,7 +261,11 @@ export default function Home() {
           }
           const errors = validateTargetForm(candidate.name, candidate.url);
           if (errors.name || errors.url) throw new Error(errors.name ?? errors.url);
-          const created = await createTarget({ name: candidate.name.trim(), url: candidate.url.trim() });
+          const accessToken = await requireAccessToken();
+          const created = await createTarget(
+            { name: candidate.name.trim(), url: candidate.url.trim() },
+            accessToken,
+          );
           setTargets((current) => [created, ...current]);
           return { id: created.id, status: "saved", name: created.name, url: created.url };
         },
@@ -251,7 +273,7 @@ export default function Home() {
     ];
     registrations.forEach((registration) => Promise.resolve(registration).catch(reportError));
     return () => lifecycle.abort();
-  }, []);
+  }, [requireAccessToken]);
 
   const filteredTargets = useMemo(() => targets.filter((target) => {
     const status = displayStatus(target);
@@ -343,7 +365,11 @@ export default function Home() {
     setSubmitting(true);
     setFormError(null);
     try {
-      const created = await createTarget({ name: name.trim(), url: url.trim() });
+      const accessToken = await requireAccessToken();
+      const created = await createTarget(
+        { name: name.trim(), url: url.trim() },
+        accessToken,
+      );
       setTargets((current) => [created, ...current]);
       setName("");
       setUrl("");
@@ -360,7 +386,8 @@ export default function Home() {
     setCheckingIds((current) => new Set(current).add(targetId));
     setActionError(null);
     try {
-      const latestCheck = await runTargetCheck(targetId);
+      const accessToken = await requireAccessToken();
+      const latestCheck = await runTargetCheck(targetId, accessToken);
       setTargets((current) => current.map((target) =>
         target.id === targetId ? { ...target, latest_check: latestCheck } : target
       ));
@@ -374,6 +401,15 @@ export default function Home() {
       });
     }
   };
+
+  if (!authLoaded) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background text-slate-400">
+        <LoaderCircle className="mr-2 animate-spin" /> Loading your workspace
+      </main>
+    );
+  }
+  if (!isSignedIn) return <RedirectToSignIn />;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -409,6 +445,10 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
+            <span className="hidden max-w-48 truncate text-sm text-slate-400 xl:block">
+              {user?.fullName ?? user?.primaryEmailAddress?.emailAddress}
+            </span>
+            <UserButton />
             <div className="hidden items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.025] px-3 py-2 text-sm text-slate-400 md:flex">
               <span className={`size-2 rounded-full ${loadError ? "bg-rose-400" : "bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.7)]"}`} />
               {loadError ? "API unavailable" : "API connected"}
@@ -566,7 +606,7 @@ export default function Home() {
                         <TableCell className="text-sm text-slate-300">{check?.response_time_ms === null || check?.response_time_ms === undefined ? "Pending" : `${check.response_time_ms} ms`}</TableCell>
                         <TableCell><span className={`inline-flex items-center gap-1.5 text-sm ${tlsDays === null ? "text-slate-500" : tlsDays > 30 ? "text-slate-300" : "text-amber-300"}`}><LockKeyhole className="size-3.5" />{tlsDays === null ? "—" : `${Math.max(0, tlsDays)} days`}</span></TableCell>
                         <TableCell>{check?.security_score === null || check?.security_score === undefined ? <span className="text-slate-600">—</span> : <div className="flex w-28 items-center gap-2"><Progress value={check.security_score} className="h-1.5 bg-white/[0.07]" /><span className={`w-6 text-xs font-semibold ${scoreColor(check.security_score)}`}>{check.security_score}</span></div>}</TableCell>
-                        <TableCell className="pr-6 text-right"><span className="block text-xs text-slate-500">{relativeTime(check?.checked_at)}</span><Button size="xs" variant="ghost" disabled={checking || !target.enabled} onClick={() => void handleCheck(target.id)} className="mt-1 text-blue-400 hover:text-blue-300">{checking ? <LoaderCircle className="animate-spin" /> : <RefreshCw />} {checking ? "Checking" : "Check now"}</Button></TableCell>
+                        <TableCell className="pr-6 text-right"><span className="block text-xs text-slate-500">{relativeTime(check?.checked_at)}</span><Button size="xs" variant="ghost" disabled={checking} onClick={() => void handleCheck(target.id)} className="mt-1 text-blue-400 hover:text-blue-300">{checking ? <LoaderCircle className="animate-spin" /> : <RefreshCw />} {checking ? "Checking" : "Check now"}</Button></TableCell>
                       </TableRow>
                     );
                   })}

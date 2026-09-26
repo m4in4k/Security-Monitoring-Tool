@@ -10,7 +10,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
-from app.models import CheckResult, Target
+from app.auth import CurrentUser
+from app.models import CheckResult, Target, User
 from app.monitoring import UnsafeTargetError, monitor_url
 from app.schemas import (
     CheckResultRead,
@@ -25,8 +26,14 @@ router = APIRouter(prefix="/targets", tags=["targets"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
-async def get_target_or_404(target_id: UUID, session: AsyncSession) -> Target:
-    target = await session.get(Target, target_id)
+async def get_target_or_404(
+    target_id: UUID,
+    owner_id: UUID,
+    session: AsyncSession,
+) -> Target:
+    target = await session.scalar(
+        select(Target).where(Target.id == target_id, Target.owner_id == owner_id)
+    )
     if target is None:
         raise HTTPException(status_code=404, detail="Target not found")
     return target
@@ -60,11 +67,15 @@ def target_read(target: Target, latest_check: CheckResult | None) -> TargetRead:
 
 async def get_target_read_or_404(
     target_id: UUID,
+    owner_id: UUID,
     session: AsyncSession,
 ) -> TargetRead:
     row = (
         await session.execute(
-            target_with_latest_check_statement().where(Target.id == target_id)
+            target_with_latest_check_statement().where(
+                Target.id == target_id,
+                Target.owner_id == owner_id,
+            )
         )
     ).one_or_none()
     if row is None:
@@ -75,14 +86,20 @@ async def get_target_read_or_404(
 @router.get("", response_model=TargetPage)
 async def list_targets(
     session: Session,
+    current_user: CurrentUser,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> TargetPage:
     """Return one page of targets with only each target's newest check."""
-    total = await session.scalar(select(func.count()).select_from(Target))
+    total = await session.scalar(
+        select(func.count()).select_from(Target).where(
+            Target.owner_id == current_user.id
+        )
+    )
     rows = (
         await session.execute(
             target_with_latest_check_statement()
+            .where(Target.owner_id == current_user.id)
             .order_by(Target.created_at.desc(), Target.id.desc())
             .limit(limit)
             .offset(offset)
@@ -97,9 +114,13 @@ async def list_targets(
 
 
 @router.post("", response_model=TargetRead, status_code=status.HTTP_201_CREATED)
-async def create_target(payload: TargetCreate, session: Session) -> Target:
+async def create_target(
+    payload: TargetCreate,
+    session: Session,
+    current_user: CurrentUser,
+) -> Target:
     """Create an authorized monitoring target."""
-    target = Target(**payload.model_dump())
+    target = Target(owner_id=current_user.id, **payload.model_dump())
     session.add(target)
     try:
         await session.flush()
@@ -111,9 +132,13 @@ async def create_target(payload: TargetCreate, session: Session) -> Target:
 
 
 @router.get("/{target_id}", response_model=TargetRead)
-async def read_target(target_id: UUID, session: Session) -> TargetRead:
+async def read_target(
+    target_id: UUID,
+    session: Session,
+    current_user: CurrentUser,
+) -> TargetRead:
     """Return one monitored target."""
-    return await get_target_read_or_404(target_id, session)
+    return await get_target_read_or_404(target_id, current_user.id, session)
 
 
 @router.patch("/{target_id}", response_model=TargetRead)
@@ -121,9 +146,10 @@ async def update_target(
     target_id: UUID,
     payload: TargetUpdate,
     session: Session,
+    current_user: CurrentUser,
 ) -> TargetRead:
     """Update selected fields on a monitored target."""
-    target = await get_target_or_404(target_id, session)
+    target = await get_target_or_404(target_id, current_user.id, session)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(target, field, value)
     try:
@@ -131,13 +157,17 @@ async def update_target(
     except IntegrityError as error:
         raise HTTPException(status_code=409, detail="Target URL already exists") from error
     await session.commit()
-    return await get_target_read_or_404(target_id, session)
+    return await get_target_read_or_404(target_id, current_user.id, session)
 
 
 @router.delete("/{target_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_target(target_id: UUID, session: Session) -> Response:
+async def delete_target(
+    target_id: UUID,
+    session: Session,
+    current_user: CurrentUser,
+) -> Response:
     """Delete a target and its monitoring history."""
-    target = await get_target_or_404(target_id, session)
+    target = await get_target_or_404(target_id, current_user.id, session)
     await session.delete(target)
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -148,9 +178,13 @@ async def delete_target(target_id: UUID, session: Session) -> Response:
     response_model=CheckResultRead,
     status_code=status.HTTP_201_CREATED,
 )
-async def check_target(target_id: UUID, session: Session) -> CheckResult:
+async def check_target(
+    target_id: UUID,
+    session: Session,
+    current_user: CurrentUser,
+) -> CheckResult:
     """Run a manual check, including for targets disabled from scheduling."""
-    target = await get_target_or_404(target_id, session)
+    target = await get_target_or_404(target_id, current_user.id, session)
     target_url = target.url
     await session.rollback()
 
@@ -160,7 +194,10 @@ async def check_target(target_id: UUID, session: Session) -> CheckResult:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
     target_exists = await session.scalar(
-        select(Target.id).where(Target.id == target_id)
+        select(Target.id).where(
+            Target.id == target_id,
+            Target.owner_id == current_user.id,
+        )
     )
     if target_exists is None:
         raise HTTPException(

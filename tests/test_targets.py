@@ -9,10 +9,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
-from app.database import get_session
 from app import targets as targets_module
+from app.auth import get_current_user
+from app.database import get_session
 from app.main import app
-from app.models import CheckResult, Target
+from app.models import CheckResult, Target, User
 from app.monitoring import MonitorOutcome, UnsafeTargetError
 
 
@@ -61,12 +62,13 @@ class FakeSession:
 
     async def flush(self) -> None:
         candidates = [*self.targets.values(), *self.pending]
-        seen_urls: dict[str, UUID | None] = {}
+        seen_urls: dict[tuple[UUID, str], UUID | None] = {}
         for target in candidates:
-            existing_id = seen_urls.get(target.url)
-            if target.url in seen_urls and existing_id != target.id:
+            key = (target.owner_id, target.url)
+            existing_id = seen_urls.get(key)
+            if key in seen_urls and existing_id != target.id:
                 raise IntegrityError("duplicate target URL", {}, ValueError(target.url))
-            seen_urls[target.url] = target.id
+            seen_urls[key] = target.id
 
         now = datetime.now(UTC)
         for target in self.pending:
@@ -96,19 +98,33 @@ class FakeSession:
         return None
 
     async def scalar(self, statement: Any) -> int | UUID | None:
-        params = statement.compile().params.values()
-        target_ids = [value for value in params if isinstance(value, UUID)]
-        if target_ids:
-            target_id = target_ids[0]
-            return target_id if target_id in self.targets else None
+        ids = [value for value in statement.compile().params.values() if isinstance(value, UUID)]
+        description = statement.column_descriptions[0]
+        if description.get("entity") is Target:
+            matches = [
+                target
+                for target in self.targets.values()
+                if target.id in ids and target.owner_id in ids
+            ]
+            if not matches:
+                return None
+            if description.get("expr") is Target:
+                return matches[0]  # type: ignore[return-value]
+            return matches[0].id
+        if ids:
+            return sum(target.owner_id in ids for target in self.targets.values())
         return len(self.targets)
 
     async def execute(self, statement: Any) -> FakeRowResult:
         params = statement.compile().params.values()
-        target_ids = [value for value in params if isinstance(value, UUID)]
+        ids = [value for value in params if isinstance(value, UUID)]
+        target_ids = [value for value in ids if value in self.targets]
+        owner_ids = [value for value in ids if value not in self.targets]
         targets = list(self.targets.values())
         if target_ids:
             targets = [target for target in targets if target.id == target_ids[0]]
+        if owner_ids:
+            targets = [target for target in targets if target.owner_id in owner_ids]
 
         targets.sort(key=lambda target: (target.created_at, target.id), reverse=True)
         offset_clause = getattr(statement, "_offset_clause", None)
@@ -153,11 +169,25 @@ class FakeSession:
 @pytest.fixture
 def api() -> Iterator[tuple[TestClient, FakeSession]]:
     session = FakeSession()
+    now = datetime.now(UTC)
+    current_user = User(
+        id=uuid4(),
+        issuer="https://issuer.example",
+        subject="alice",
+        email="alice@example.com",
+        display_name="Alice",
+        created_at=now,
+        updated_at=now,
+    )
 
     async def override_session() -> AsyncIterator[FakeSession]:
         yield session
 
+    async def override_current_user() -> User:
+        return current_user
+
     app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_current_user] = override_current_user
     try:
         with TestClient(app) as client:
             yield client, session

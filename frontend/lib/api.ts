@@ -56,13 +56,18 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  accessToken: string,
+  init?: RequestInit,
+): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
       cache: "no-store",
       headers: {
+        Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
         ...init?.headers,
       },
@@ -98,7 +103,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export async function getTargets(signal?: AbortSignal): Promise<Target[]> {
+export async function getTargets(
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<Target[]> {
   const pageSize = 100;
   const targets: Target[] = [];
   let offset = 0;
@@ -106,6 +114,7 @@ export async function getTargets(signal?: AbortSignal): Promise<Target[]> {
   while (true) {
     const page = await request<TargetPage>(
       `/targets?limit=${pageSize}&offset=${offset}`,
+      accessToken,
       { signal },
     );
     targets.push(...page.items);
@@ -114,13 +123,21 @@ export async function getTargets(signal?: AbortSignal): Promise<Target[]> {
   }
 }
 
-export function createTarget(input: CreateTargetInput): Promise<Target> {
-  return request<Target>("/targets", {
+export function createTarget(
+  input: CreateTargetInput,
+  accessToken: string,
+): Promise<Target> {
+  return request<Target>("/targets", accessToken, {
     method: "POST",
     body: JSON.stringify(input),
   });
 }
 
-export function runTargetCheck(targetId: string): Promise<CheckResult> {
-  return request<CheckResult>(`/targets/${targetId}/checks`, { method: "POST" });
+export function runTargetCheck(
+  targetId: string,
+  accessToken: string,
+): Promise<CheckResult> {
+  return request<CheckResult>(`/targets/${targetId}/checks`, accessToken, {
+    method: "POST",
+  });
 }

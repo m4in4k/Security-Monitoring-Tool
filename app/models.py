@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -22,6 +23,32 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 class Base(DeclarativeBase):
     """Base class for all database models."""
+
+
+class User(Base):
+    """A locally provisioned identity from the configured OIDC provider."""
+
+    __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("issuer", "subject", name="uq_users_issuer_subject"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    issuer: Mapped[str] = mapped_column(String(500))
+    subject: Mapped[str] = mapped_column(String(255))
+    email: Mapped[str | None] = mapped_column(String(320))
+    display_name: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    targets: Mapped[list["Target"]] = relationship(back_populates="owner")
 
 
 class Target(Base):
@@ -34,11 +61,16 @@ class Target(Base):
             name="ck_targets_check_interval_range",
         ),
         CheckConstraint("length(trim(name)) > 0", name="ck_targets_name_not_blank"),
+        UniqueConstraint("owner_id", "url", name="uq_targets_owner_url"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    owner_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(120))
-    url: Mapped[str] = mapped_column(Text, unique=True, index=True)
+    url: Mapped[str] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     check_interval_seconds: Mapped[int] = mapped_column(
         Integer,
@@ -67,6 +99,15 @@ class Target(Base):
         back_populates="target",
         cascade="all, delete-orphan",
     )
+    owner: Mapped[User] = relationship(back_populates="targets")
+
+
+Index(
+    "ix_targets_owner_created",
+    Target.owner_id,
+    Target.created_at.desc(),
+    Target.id.desc(),
+)
 
 
 class CheckResult(Base):

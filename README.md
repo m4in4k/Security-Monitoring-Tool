@@ -2,23 +2,25 @@
 
 Sekuro is a web-based availability and security monitoring platform built with
 FastAPI, PostgreSQL, and a responsive React dashboard. It monitors authorized
-HTTP and HTTPS targets, records their latest results, and presents availability,
-latency, TLS, and basic security-header information in one interface.
+HTTP and HTTPS targets, retains their historical results, and presents
+availability, uptime, latency, TLS, and basic security-header information in one
+interface.
 
-> **Current stage:** Phase 3 adds Clerk authentication, FastAPI JWT verification,
-> local user provisioning, and strict per-user target ownership. Phase 2's
-> paginated, index-backed target API remains the foundation for the protected
-> multi-user dashboard.
+> **Current stage:** Phase 4 adds paginated and date-filtered monitoring history,
+> historical uptime and response-time metrics, configurable result retention,
+> and target-detail charts. Phase 3's authentication and per-user ownership
+> remain the security foundation for every historical query.
 
 ## Current release
 
-**v0.3.0 — Multi-User Authentication and Ownership**
+**v0.4.0 — Historical Monitoring Results**
 
-Phase 3 adds Clerk authentication, independently verified FastAPI bearer
-tokens, automatic local-user provisioning, strict per-user target ownership,
-protected monitoring operations, and PostgreSQL authorization tests.
+Phase 4 adds a protected monitoring-history API with pagination and date-range
+filters, full-range uptime and response-time calculations, bounded chart
+series, configurable retention, and target-detail pages with real status and
+latency charts.
 
-See the [v0.3.0 release](https://github.com/m4in4k/Security-Monitoring-Tool/releases/tag/v0.3.0).
+See the [v0.4.0 release](https://github.com/m4in4k/Security-Monitoring-Tool/releases/tag/v0.4.0).
 
 ## Features
 
@@ -29,6 +31,11 @@ See the [v0.3.0 release](https://github.com/m4in4k/Security-Monitoring-Tool/rele
 - Target name, URL, enabled-state, and check-interval validation
 - Duplicate-target prevention through normalized URLs
 - Manual **Check now** monitoring actions
+- Paginated monitoring history with timezone-aware date-range filtering
+- Historical uptime, average response time, and response-time range metrics
+- Target-detail pages with response-time and status-history charts
+- Bounded full-range chart series independent of table pagination
+- Configurable retention for old monitoring results
 - HTTP response status and latency collection
 - TLS certificate-expiry inspection
 - Basic browser security-header checks and scoring
@@ -76,7 +83,7 @@ app/                 FastAPI application and monitoring logic
 migrations/          Alembic database migrations
 tests/               Backend tests
 frontend/            React dashboard
-  app/               Dashboard pages and global styles
+  app/               Dashboard, target-history pages, and global styles
   components/ui/     Reusable interface components
   lib/               Typed FastAPI client
 alembic.ini           Alembic configuration
@@ -276,6 +283,10 @@ The verified checks include:
 - Migration downgrade and re-upgrade
 - Target CRUD and duplicate rejection
 - Persisted monitoring results
+- Paginated and date-filtered historical monitoring results
+- Full-range uptime and response-time aggregate calculations
+- Bounded chart-series sampling with first and last results preserved
+- Transactional and standalone retention cleanup
 - Cascaded target and result deletion
 - Dashboard creation and manual-check flows
 - Persistence after browser reload
@@ -285,8 +296,13 @@ The verified checks include:
   wrong-origin, and unsupported-algorithm tokens
 - Two-user authorization tests for list, read, update, delete, and manual checks
 - Real PostgreSQL integration coverage for ownership and user provisioning
+- Real PostgreSQL integration coverage for history, uptime, and retention
+- Target-detail response-time and status charts
 - ESLint and TypeScript checks
 - Successful frontend production build
+
+The v0.4.0 verification run completed with 81 passing backend tests, including
+the isolated PostgreSQL integration suite.
 
 ## Run validation locally
 
